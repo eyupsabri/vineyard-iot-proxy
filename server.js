@@ -2,39 +2,64 @@ const express = require("express");
 const axios = require("axios");
 const app = express();
 
-// 👇 Prevent automatic HTTPS redirect (very important!)
-app.enable("trust proxy");
-app.use((req, res, next) => {
-  // If the request is HTTP, continue (don't redirect)
-  if (!req.secure) return next();
-  next();
-});
-
 app.get("/poll", async (req, res) => {
   const id = req.query.deviceIdentifier;
   if (!id) return res.status(400).send("Missing deviceIdentifier");
 
   try {
     const response = await axios.get(
-      `http://vineyardappdemo-abamb9dxeycfffgn.polandcentral-01.azurewebsites.net/api/IoTDevice/GetDesiredDeviceStatus?deviceIdentifier=${id}`,
-      {
-        headers: {
-          "Host": "vineyardappdemo-abamb9dxeycfffgn.polandcentral-01.azurewebsites.net",
-          "User-Agent": "SIM808/1.0",
-          "Accept": "*/*",
-        },
-      }
+      `https://vineyardappdemo-abamb9dxeycfffgn.polandcentral-01.azurewebsites.net/api/IoTDevice/GetDesiredDeviceStatus?deviceIdentifier=${id}`
     );
-    res.json(response.data);
+
+    const body = `desiredState=${response.data.desiredState};manual=${response.data.isManualOverride}`;
+
+    res.setHeader("Content-Type", "text/plain");
+    res.setHeader("Content-Length", Buffer.byteLength(body));
+    res.setHeader("Connection", "close");
+    res.status(200).end(body); // ✅ only body here, no HTTP line manually
   } catch (err) {
     console.error("Azure error:", err.response?.status, err.response?.data);
-    res
-      .status(err.response?.status || 500)
-      .send("Azure forwarding failed");
+    res.status(500).send("Azure forwarding failed");
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("Proxy running on port", PORT);
+app.get("/update", async (req, res) => {
+  const { deviceIdentifier, actualState, triggeredBy } = req.query;
+
+  if (!deviceIdentifier || actualState === undefined || triggeredBy === undefined) {
+    return res.status(400).send("Missing one or more required query parameters.");
+  }
+
+  try {
+    const payload = {
+      deviceIdentifier,
+      actualState: actualState === "true",
+      triggeredBy: parseInt(triggeredBy)
+    };
+
+    const response = await axios.post(
+      "https://vineyardappdemo-abamb9dxeycfffgn.polandcentral-01.azurewebsites.net/api/IoTDevice/UpdateIoTDeviceStatus",
+      payload,
+      {
+        headers: {
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+    const body = `updated=${response.data.updated}`;
+
+    res.setHeader("Content-Type", "text/plain");
+    res.setHeader("Content-Length", Buffer.byteLength(body));
+    res.setHeader("Connection", "close");
+    res.status(200).end(body); // ✅ no manual HTTP line
+  } catch (err) {
+    console.error("Azure POST error:", err.response?.status, err.response?.data);
+    res.status(500).send("Azure POST forwarding failed");
+  }
+});
+
+const port = process.env.PORT || 8080;
+app.listen(port, "0.0.0.0", () => {
+  console.log("Proxy running on port", port);
 });
